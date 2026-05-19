@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { Resend } from 'resend'
 
 interface LineItem {
   id: string
@@ -11,6 +12,7 @@ interface LineItem {
 interface ReceiptData {
   transactionId: string
   storeName: string
+  storeEmail?: string
   storeAddress: string
   storePhone: string
   customerName: string
@@ -248,71 +250,6 @@ function isValidEmail(email: string): boolean {
   return emailRegex.test(email)
 }
 
-// Function to send email via Nodemailer (using local/test SMTP)
-async function sendEmailViaNodemailer(
-  to: string,
-  subject: string,
-  htmlContent: string,
-  storeName: string
-): Promise<boolean> {
-  try {
-    // Using fetch to call a simple email service
-    // In production, configure with your SMTP settings or email service provider
-
-    // For development/testing, we'll use a console-based approach
-    // In production, replace with actual service like:
-    // - Resend API (https://resend.com/)
-    // - SendGrid (https://sendgrid.com/)
-    // - AWS SES
-    // - Mailgun
-
-    console.log('[v0] Email Service - Starting email send')
-    console.log('[v0] Recipient:', to)
-    console.log('[v0] Subject:', subject)
-    console.log('[v0] From:', `noreply@${storeName.toLowerCase().replace(/\s+/g, '')}.com`)
-
-    // Attempt to send via email service if configured
-    const emailServiceUrl = process.env.EMAIL_SERVICE_URL
-    const emailServiceKey = process.env.EMAIL_SERVICE_KEY
-
-    if (emailServiceUrl && emailServiceKey) {
-      console.log('[v0] Using email service:', emailServiceUrl)
-      const response = await fetch(emailServiceUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${emailServiceKey}`,
-        },
-        body: JSON.stringify({
-          from: `noreply@noobs-pos.local`,
-          to: to,
-          subject: subject,
-          html: htmlContent,
-        }),
-      })
-
-      if (!response.ok) {
-        const error = await response.text()
-        console.error('[v0] Email service error:', error)
-        return false
-      }
-
-      console.log('[v0] Email sent successfully via service')
-      return true
-    }
-
-    // Fallback: Simulate successful send for local development
-    console.log('[v0] No email service configured - simulating successful send')
-    console.log('[v0] In production, configure EMAIL_SERVICE_URL and EMAIL_SERVICE_KEY environment variables')
-    console.log('[v0] Email would be sent to:', to)
-
-    return true
-  } catch (error) {
-    console.error('[v0] Error in sendEmailViaNodemailer:', error)
-    return false
-  }
-}
-
 export async function POST(request: NextRequest) {
   try {
     const data: ReceiptData = await request.json()
@@ -332,6 +269,20 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    // Check for Resend API key
+    const resendApiKey = process.env.RESEND_API_KEY
+    
+    if (!resendApiKey) {
+      console.log('[v0] RESEND_API_KEY not configured - email cannot be sent')
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Email service not configured. Please add RESEND_API_KEY environment variable.',
+        },
+        { status: 500 }
+      )
+    }
+
     // Generate HTML email
     const htmlContent = generateEmailTemplate(data)
     const subject = `Receipt - ${data.transactionId} from ${data.storeName}`
@@ -339,31 +290,44 @@ export async function POST(request: NextRequest) {
     console.log('[v0] Processing receipt email request')
     console.log('[v0] Transaction:', data.transactionId)
     console.log('[v0] Customer Email:', data.customerEmail)
+    console.log('[v0] Store Email:', data.storeEmail)
 
-    // Send email
-    const emailSent = await sendEmailViaNodemailer(
-      data.customerEmail,
-      subject,
-      htmlContent,
-      data.storeName
-    )
+    // Initialize Resend
+    const resend = new Resend(resendApiKey)
 
-    if (!emailSent) {
+    // Send email using Resend
+    // Note: For production, you need to verify your domain with Resend
+    // For testing, Resend allows sending to any email from onboarding@resend.dev
+    const { data: emailResult, error } = await resend.emails.send({
+      from: data.storeEmail 
+        ? `${data.storeName} <onboarding@resend.dev>` 
+        : `${data.storeName} <onboarding@resend.dev>`,
+      to: [data.customerEmail],
+      subject: subject,
+      html: htmlContent,
+      replyTo: data.storeEmail || undefined,
+    })
+
+    if (error) {
+      console.error('[v0] Resend error:', error)
       return NextResponse.json(
         {
           success: false,
-          message: 'Email service unavailable. Please check configuration.',
-          error: 'Email sending failed',
+          error: error.message || 'Failed to send email',
         },
         { status: 500 }
       )
     }
+
+    console.log('[v0] Email sent successfully!')
+    console.log('[v0] Email ID:', emailResult?.id)
 
     return NextResponse.json(
       {
         success: true,
         message: `Receipt sent to ${data.customerEmail}`,
         transactionId: data.transactionId,
+        emailId: emailResult?.id,
       },
       { status: 200 }
     )

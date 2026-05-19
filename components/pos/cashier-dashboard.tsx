@@ -170,6 +170,7 @@ export function CashierDashboard() {
         body: JSON.stringify({
           transactionId: completedTransaction.id,
           storeName: settings.storeName,
+          storeEmail: settings.storeEmail,
           storeAddress: 'Jl.Guru Saleh No.29, Cilandak, Jakarta Selatan',
           storePhone: '(021) 1234-5678',
           customerName: completedTransaction.customerName,
